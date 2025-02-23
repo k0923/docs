@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "使用技巧/git/GIT 配置提交覆盖.md",
+                "file": "编辑器/前端 Markdown解析.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "GIT 配置提交覆盖"
+              "title": "前端 Markdown解析"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "使用技巧/git/GIT 配置提交覆盖.md",
+                "file": "编辑器/前端 Markdown解析.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "GIT 配置提交覆盖 的反向链接列表"
+              "title": "前端 Markdown解析 的反向链接列表"
             }
           },
           {
@@ -113,12 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "使用技巧/git/GIT 配置提交覆盖.md",
+                "file": "编辑器/前端 Markdown解析.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "GIT 配置提交覆盖 的出链列表"
+              "title": "前端 Markdown解析 的出链列表"
             }
           },
           {
@@ -142,13 +142,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "使用技巧/git/GIT 配置提交覆盖.md",
+                "file": "编辑器/前端 Markdown解析.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "GIT 配置提交覆盖 的大纲"
+              "title": "前端 Markdown解析 的大纲"
             }
           }
         ]
@@ -171,8 +171,12 @@
   },
   "active": "ad4e97df8691695c",
   "lastOpenFiles": [
-    "使用技巧/git/Git配置多REMOTE.md",
+    "编辑器/Markdown编辑器.md",
+    "编辑器/前端 Markdown解析.md",
     "使用技巧/git/GIT 配置提交覆盖.md",
+    "编辑器",
+    "minds/Schema.emmx",
+    "使用技巧/git/Git配置多REMOTE.md",
     "使用技巧/git",
     "待归类",
     "使用技巧",
