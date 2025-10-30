@@ -1,5 +1,8 @@
 {
   "accentColor": "",
   "theme": "obsidian",
-  "cssTheme": "Atom"
+  "cssTheme": "Zen",
+  "enabledCssSnippets": [
+    "editor-full"
+  ]
 }
