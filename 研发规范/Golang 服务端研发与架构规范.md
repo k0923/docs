@@ -1,0 +1,905 @@
+这是一份经过全面整合升级的 **Golang 服务端研发与架构规范 (v5.0)**。
+
+  
+
+这份文档在 v4.0 的基础上，**新增了 MongoDB 数据层深度封装规范**、**依赖注入（Dependency Injection）的最佳实践**，并针对 **Service 间通信**、**RocketMQ 生产消费闭环** 以及 **第三方外部接口集成** 补充了详细的约束条款。
+
+  
+
+---
+
+  
+
+# Golang 服务端研发与架构规范 (v5.0)
+
+  
+
+**生效日期**: 2025
+
+**适用架构**: Monolithic Microservice (单进程多模态)
+
+**技术栈**: Go 1.22+ | Hertz | MongoDB | Redis | RocketMQ | WebAssembly
+
+  
+
+---
+
+  
+
+## 1. 项目结构与目录组织 (Project Layout)
+
+  
+
+### 1.1 设计理念
+
+  
+
+基于 **Clean Architecture (整洁架构)**，核心目标是**依赖单向流动** `Handler -> Service -> DAL`。
+
+  
+
+v5.0 强调**数据模型分离**（Entity vs DTO）以及**依赖注入**的显式化。
+
+  
+
+### 1.2 目录树与文件职责
+
+  
+
+```text
+
+my-project/
+
+├── cmd/
+
+│ ├── server/ # [入口] HTTP Server + 依赖组装 (Composition Root)
+
+│ │ ├── main.go # -> Sample 1: 手动依赖注入
+
+│ │ └── wire.go # -> (可选) Google Wire 注入定义
+
+│ └── wasm/ # [入口] 前端 WASM 构建入口
+
+│ └── main.go # -> 仅引用 pkg/core
+
+│
+
+├── pkg/ # [通用层] 无状态、无业务副作用
+
+│ ├── core/ # ★★★ [核心域] 纯算法/规则 (WASM 共用)
+
+│ │ └── calculator.go # -> Sample 2: 严禁引用 database/net 包
+
+│ └── util/ # 工具链 (Crypto, Time)
+
+│
+
+├── biz/ # [业务层]
+
+│ ├── model/ # [API DTO] Hertz 生成的 HTTP 接口模型
+
+│ │ └── order_dto.go # -> 含 json/vd 标签，用于 Controller
+
+│ │
+
+│ ├── handler/ # [接入层] HTTP Controller & MQ Consumer
+
+│ │ ├── middleware/ # -> HTTP 中间件
+
+│ │ ├── http/ # -> HTTP 接口实现
+
+│ │ │ └── order_hdl.go # -> 持有 Service 接口
+
+│ │ └── mq/ # -> MQ 消费者实现 (入口)
+
+│ │ └── task_csm.go # -> 监听消息并调用 Service
+
+│ │
+
+│ ├── service/ # [逻辑层] 业务编排 & 模型转换 (Entity <-> DTO)
+
+│ │ └── order_svc.go # -> Sample 3: 持有 DAL 接口及其他 Service 依赖
+
+│ │
+
+│ └── dal/ # [数据层] 所有的 IO 操作
+
+│ ├── model/ # [数据模型集合]
+
+│ │ ├── cache/ # -> ★★★ Redis 缓存模型
+
+│ │ │ └── user.go # -> 用户缓存模型
+
+│ │ ├── entity/ # -> ★★★ [DB 实体] MongoDB 专用
+
+│ │ │ └── order.go # -> 含 bson 标签，无前端校验逻辑
+
+│ │ └── external/ # -> [第三方防腐] 外部接口模型
+
+│ │ ├── wechat/ # -> 微信专用 Request/Response
+
+│ │ └── logistics/# -> 物流专用 Request/Response
+
+│ ├── mongo/ # -> DB 操作封装 (Repository Pattern)
+
+│ │ ├── init.go # -> 数据库连接初始化
+
+│ │ └── order_dal.go # -> Sample 4: 具体的 CRUD 实现
+
+│ ├── redis/ # -> Redis 客户端封装
+
+│ │ └── init.go # -> Redis 连接初始化
+
+│ ├── mq/ # -> RocketMQ Producer (出口)
+
+│ │ └── task_prod.go # -> 负责发送消息
+
+│ └── external/ # -> [外部接口客户端] HTTP Client 封装
+
+│ └── logistics/ # -> 物流接口客户端实现
+
+│
+
+├── conf/ # 配置文件
+
+└── go.mod
+
+```
+
+  
+
+---
+
+  
+
+## 2. 核心难点：第三方模型集成 (Anti-Corruption Layer)
+
+  
+
+**用户问题**：*“第三方接口的 Request/Response 模型和系统内部模型结构非常相似，是否可以复用？怎么处理？”*
+
+  
+
+### 2.1 规范原则
+
+  
+
+1. **严禁复用 (Decoupling > DRY)**：即使字段 100% 一致，**绝对不能**复用内部模型。外部接口的变化不可控，复用会导致“牵一发而动全身”。
+
+2. **物理隔离**：在 `biz/dal/model/external/{provider}` 下定义专用的结构体，Tag 必须严格跟随第三方文档（通常是 `snake_case`）。
+
+3. **防腐层 (ACL)**：在 **Service 层** 将“外部模型”转换为“内部模型”。
+
+  
+
+### 2.2 代码实战 (Sample)
+
+  
+
+#### Step 1: 定义第三方专用模型
+
+**文件**: `biz/dal/model/external/wechat/user.go`
+
+  
+
+```go
+
+package wechat
+
+  
+
+// WxUserResponse 严格对应微信 API 文档
+
+type WxUserResponse struct {
+
+OpenID string `json:"openid"` // 第三方用全小写
+
+NickName string `json:"nickname"`
+
+Sex int `json:"sex"`
+
+}
+
+```
+
+  
+
+#### Step 2: Service 层进行转换 (防腐)
+
+**文件**: `biz/service/user_service.go`
+
+  
+
+```go
+
+// SyncUser 是防腐层发挥作用的地方
+
+func (s *UserService) SyncUser(ctx context.Context, openID string) (*model.UserProfile, error) {
+
+// 1. 调用 DAL (获取外部脏模型)
+
+wxUser, err := s.wechatClient.GetUser(ctx, openID)
+
+if err != nil { return nil, err }
+
+  
+
+// 2. ★★★ 转换逻辑 (Mapping) ★★★
+
+// 将外部的不确定性隔离在此处，Controller 永远只看到干净的内部模型
+
+internalUser := &model.UserProfile{
+
+ID: wxUser.OpenID,
+
+Name: wxUser.NickName,
+
+Gender: convertSex(wxUser.Sex),
+
+}
+
+return internalUser, nil
+
+}
+
+```
+
+  
+
+---
+
+  
+
+## 3. 混合进程并发规范 (Concurrency in Hybrid Mode)
+
+  
+
+**场景**：Hertz (HTTP) 和 RocketMQ Consumer 在同一个进程内运行。
+
+  
+
+### 3.1 启动规范
+
+  
+
+必须确保 MQ 消费者的 Panic 不会带崩整个 HTTP 服务。
+
+  
+
+**文件**: `cmd/server/main.go`
+
+  
+
+```go
+
+// ... 在 main 中 ...
+
+// ★★★ 异步启动 MQ (带 Recover) ★★★
+
+go func() {
+
+defer func() {
+
+if r := recover(); r != nil {
+
+hlog.Errorf("MQ Consumer Panic: %v", r)
+
+}
+
+}()
+
+mq.StartConsumer(ctx) // 阻塞操作
+
+}()
+
+// ... 启动 HTTP ...
+
+```
+
+  
+
+---
+
+  
+
+## 4. WASM 核心层规范 (WebAssembly Core)
+
+  
+
+### 4.1 纯净性原则
+
+  
+
+**规范**：`pkg/core` 下的代码 **严禁** 导入 `net/http`, `database/sql`, `os` 等与系统底层交互的包。
+
+  
+
+**文件**: `pkg/core/calculator.go` (Sample 2)
+
+  
+
+```go
+
+package core
+
+  
+
+// DiscountRule 纯内存计算，前后端通用
+
+func CalculateDiscount(price float64, userLevel int) float64 {
+
+if userLevel > 5 { return price * 0.8 }
+
+return price
+
+}
+
+```
+
+  
+
+---
+
+  
+
+## 5. 错误处理与日志 (Error & Logging)
+
+  
+
+### 5.1 错误包装
+
+**规范**：Service 层返回错误时，必须使用 `%w` 包装，提供上下文。
+
+* **Good**: `return fmt.Errorf("payment gateway failed: %w", err)`
+
+  
+
+### 5.2 结构化日志
+
+**规范**：使用 `hlog` 或 `zap`，必须记录 `TraceID`。
+
+  
+
+---
+
+  
+
+## 6. 数据库与数据层深度封装 (Database & DAL) [v5.0 新增]
+
+  
+
+### 6.1 模型分离原则 (Entity vs DTO)
+
+  
+
+**规范**：数据库模型（Entity）与 API 模型（DTO）必须物理分离。
+
+  
+
+* **Entity (`biz/dal/model/entity`)**: 对应 MongoDB 集合，包含 `bson` 标签，包含 `CreatedAt` 等审计字段。
+
+* **DTO (`biz/model`)**: 对应 HTTP 接口，包含 `json` 标签和 `vd` 校验标签。
+
+  
+
+**代码示例 (Entity)**:
+
+```go
+
+package entity
+
+import "go.mongodb.org/mongo-driver/bson/primitive"
+
+  
+
+type OrderEntity struct {
+
+ID primitive.ObjectID `bson:"_id,omitempty"`
+
+OrderNo string `bson:"order_no"`
+
+Amount int64 `bson:"amount"` // 存分
+
+}
+
+```
+
+  
+
+### 6.2 DAL 层封装 (Repository Pattern)
+
+  
+
+**规范**：Service 层禁止直接引入 `go.mongodb.org/mongo-driver`，必须通过 DAL 调用。
+
+  
+
+**代码示例 (DAL)**: `biz/dal/mongo/order_dal.go`
+
+```go
+
+package mongo
+
+  
+
+type OrderDAL struct {
+
+col *mongo.Collection
+
+}
+
+  
+
+// NewOrderDAL 构造函数
+
+func NewOrderDAL(db *mongo.Database) *OrderDAL {
+
+return &OrderDAL{col: db.Collection("orders")}
+
+}
+
+  
+
+func (d *OrderDAL) GetByOrderNo(ctx context.Context, no string) (*entity.OrderEntity, error) {
+
+var result entity.OrderEntity
+
+err := d.col.FindOne(ctx, bson.M{"order_no": no}).Decode(&result)
+
+return &result, err
+
+}
+
+```
+
+  
+
+### 6.3 Service 层串联
+
+**规范**：Service 负责将 Entity 转换为 DTO。
+
+```go
+
+func (s *OrderService) GetOrder(ctx context.Context, no string) (*model.OrderDTO, error) {
+
+// 1. 调 DAL 获取 Entity
+
+ent, err := s.orderDAL.GetByOrderNo(ctx, no)
+
+if err != nil { return nil, err }
+
+  
+
+// 2. 转 DTO
+
+return &model.OrderDTO{
+
+OrderNo: ent.OrderNo,
+
+Price: float64(ent.Amount) / 100.0, // 分转元
+
+}, nil
+
+}
+
+```
+
+  
+
+---
+
+  
+
+## 7. 依赖注入与启动组装 (Dependency Injection) [v5.0 新增]
+
+  
+
+### 7.1 组装根 (Composition Root)
+
+  
+
+**规范**：所有的依赖关系必须在 `main` 函数（或其调用的初始化方法）中显式组装。**严禁**在业务代码中使用全局变量（如 `global.DB` 或 `global.UserService`）获取依赖。
+
+  
+
+### 7.2 Service 间依赖 (Service-to-Service)
+
+  
+
+**规范**：当 Service A 需要调用 Service B 时，必须通过构造函数注入。**严禁**使用单例模式直接访问。
+
+  
+
+**代码示例 (Service Layer)**:
+
+```go
+
+// biz/service/order_svc.go
+
+type OrderService struct {
+
+orderDAL *mongo.OrderDAL
+
+userSvc *UserService // ✅ 显式声明依赖
+
+}
+
+  
+
+// NewOrderService 构造函数
+
+func NewOrderService(dal *mongo.OrderDAL, uSvc *UserService) *OrderService {
+
+return &OrderService{
+
+orderDAL: dal,
+
+userSvc: uSvc, // ✅ 注入实例
+
+}
+
+}
+
+```
+
+  
+
+### 7.3 外部接口依赖 (External API Integration)
+
+  
+
+**规范**：第三方接口（如物流、支付）应视为 DAL 资源。必须封装 Client 接口，并通过依赖注入提供给 Service。
+
+  
+
+**代码示例 (External Client)**: `biz/dal/external/logistics/client.go`
+
+```go
+
+// 定义接口，方便 Mock
+
+type LogisticsClient interface {
+
+CreateLogisticsOrder(ctx context.Context, req *logistics.CreateOrderReq) (string, error)
+
+}
+
+// 具体实现略...
+
+```
+
+  
+
+### 7.4 组装流程 (Wiring)
+
+  
+
+**文件**: `cmd/server/main.go`
+
+  
+
+```go
+
+package main
+
+  
+
+import (
+
+"my-project/biz/dal/mongo"
+
+"my-project/biz/dal/external/logistics"
+
+"my-project/biz/handler"
+
+"my-project/biz/service"
+
+"github.com/cloudwego/hertz/pkg/app/server"
+
+)
+
+  
+
+func main() {
+
+// 1. Infrastructure (最底层资源)
+
+db := mongo.InitMongo("mongodb://localhost:27017", "shop_db")
+
+  
+
+// 2. Wiring (依赖注入 - 手动组装)
+
+// 2.1 DAL Layer (DB & External)
+
+orderDAL := mongo.NewOrderDAL(db)
+
+userDAL := mongo.NewUserDAL(db)
+
+logiCli := logistics.NewLogisticsClient("API_KEY", "https://api.sf.com") // 外部接口
+
+  
+
+// 2.2 Service Layer (注意顺序：先被依赖者，后依赖者)
+
+userSvc := service.NewUserService(userDAL)
+
+// ★★★ 将 userSvc 和 logiCli 注入给 orderSvc ★★★
+
+orderSvc := service.NewOrderService(orderDAL, userSvc, logiCli)
+
+  
+
+// 2.3 Handler Layer (注入 Service)
+
+orderHdl := handler.NewOrderHandler(orderSvc)
+
+  
+
+// 3. Server & Route
+
+h := server.Default()
+
+h.GET("/orders/:no", orderHdl.GetOrder)
+
+h.Spin()
+
+}
+
+```
+
+  
+
+---
+
+  
+
+## 8. Q&A (针对架构痛点)
+
+  
+
+### Q1: 第三方接口模型和内部模型很像，我手写两遍代码感觉很傻，怎么办？
+
+**A:** 这是**架构防御性编程**。省了这一步，未来第三方 API 变更时，你的系统将面临大规模重构风险。可以使用 `jinzhu/copier` 库辅助字段拷贝，但结构体定义必须隔离。
+
+  
+
+### Q2: 编译 WASM 时报错 `imports net/http` 怎么排查？
+
+**A:** 检查 `cmd/wasm/main.go` 的引用链。WASM 入口**只**允许引用 `pkg/core`。如果有业务逻辑需要复用，必须将这部分逻辑剥离为纯函数。
+
+  
+
+### Q3: 为什么要把 MQ 消费者和 HTTP 服务放在同一个进程？
+
+**A:** 中等规模服务的最佳实践。优点是部署简单、节省资源；缺点是隔离性差，必须做好 Panic Recover。
+
+  
+
+### Q4: Service 层可以直接返回 Entity (DB模型) 给 Controller 吗？
+
+**A:** **不建议**。Entity 包含 `bson` 和数据库字段（如 `IsDeleted`），DTO 包含 `json` 和前端校验规则。Service 层应负责 Entity -> DTO 的转换。
+
+  
+
+### Q5: [v5.0] MongoDB 的操作逻辑应该放在哪里？
+
+**A:**
+
+1. **Model**: `biz/dal/model/entity` (带 bson tag)。
+
+2. **Logic**: `biz/dal/mongo` (处理 Find/Insert 和驱动细节)。
+
+3. **Service**: 调用 Logic，不做具体的 DB 操作。
+
+  
+
+### Q6: [v5.0] 在 main 中处理所有层的依赖组装（NewXXX）合理吗？
+
+**A:** **完全合理**。这被称为 Composition Root 模式。
+
+* **优点**：依赖关系一目了然，无“魔法”全局变量，极易进行单元测试（方便 Mock）。
+
+* **进阶**：当项目过大时，可将组装逻辑提取到 `init_deps.go` 函数中，或使用 **Google Wire** 自动生成组装代码。
+
+  
+
+### Q7: [v5.0] 我能在 Service 内部直接通过单实例访问其他 Service 吗？
+
+**A:** **严禁**。
+
+* **错误示范**: `service.GlobalUserService.GetUser(uid)`。这隐藏了依赖关系，导致代码难以测试且耦合度极高。
+
+* **正确做法**: 在 Struct 中定义依赖字段，并在 `main.go` 中通过构造函数注入。
+
+* **注意**: 如果出现循环依赖（A 依赖 B，B 依赖 A），说明架构设计有问题，请考虑引入 Event (MQ) 解耦或提取公共逻辑到第三个 Service。
+
+  
+
+### Q8: [v5.0] 消息任务场景：Consumer 调用 Service，Service 又调用 Producer 发新消息，这算循环依赖吗？
+
+**A:** **不算**。
+
+在 v5.0 架构中，依赖流向是单向线性的：
+
+`Consumer (Handler层) -> Service (Logic层) -> Producer (DAL层)`。
+
+* **Consumer** 位于入口层，依赖 Service。
+
+* **Producer** 位于数据层，只负责发消息，不依赖 Service 或 Consumer。
+
+* **结论**：代码结构上无闭环。但需注意**业务逻辑上的死循环**（如 A 发给 B，B 又发回给 A），建议通过分离 Topic 或增加消息深度检查来防御。
+
+  
+
+### Q9: [v5.0] OrderService 要调用第三方物流接口，代码结构怎么写？
+
+**A:** 将第三方接口视为 **DAL 层** 资源。
+
+1. **位置**: 客户端实现放在 `biz/dal/external/logistics/`。
+
+2. **模型**: 专用的 Request/Response struct 放在 `biz/dal/model/external/`。
+
+3. **调用**: 定义 `LogisticsClient` 接口，并在 `OrderService` 中注入该接口。严禁在 Service 内部直接发起 HTTP 请求。
+
+  
+
+这是一个非常细致且体现了 Go 语言工程化审美的问题。
+
+  
+
+在 Go 语言的社区规范和标准库（Standard Library）设计中，包名（Package Name）是单数还是复数，遵循一套**“语义优先 + 调用顺口”**的潜规则。
+
+  
+
+在 **v5.0 架构**中，我们严格遵守以下约定：
+
+  
+
+---
+
+  
+
+### 1. 单数原则 (Singular) —— 默认规则
+
+  
+
+**适用场景**：代表**一种逻辑概念、一层架构、一个工具集合**。
+
+**核心逻辑**：当你调用它时，它读起来应该像一个“名词”或“工具名”。
+
+  
+
+* **`util` (而不是 utils)**
+
+* **原因**：它被视为一个**工具箱（Toolkit）**。你是在使用“这个工具箱”里的功能。
+
+* **调用感**：`util.Map(...)` -> 读作 "Utility Map"（通用映射工具）。
+
+* **反例**：`utils.Map` -> 读作 "Utilities Map"（杂货堆里的映射），在 Go 中 `utils` 被视为不地道的命名（Non-Idiomatic），虽然在 Java/JS 中很常见。
+
+  
+
+* **`service` / `handler` / `dal`**
+
+* **原因**：代表架构中的**一层（Layer）**。
+
+* **调用感**：`service.NewUserService()` -> 代表“服务层”里的用户服务。
+
+  
+
+* **`json` / `http` / `sql` (标准库范例)**
+
+* **原因**：代表一种**协议**或**技术**。
+
+* **调用感**：`json.Marshal` (JSON 的序列化)，而不是 `jsons.Marshal`。
+
+  
+
+---
+
+  
+
+### 2. 复数原则 (Plural) —— 集合容器
+
+  
+
+**适用场景**：代表**一堆同类事物的集合**，或者为了**避免与 Go 关键字/内置类型冲突**。
+
+**核心逻辑**：当你调用它时，你是在从“一堆东西”里取出“一个”。
+
+  
+
+* **`types` (而不是 type)**
+
+* **原因 1 (冲突)**：`type` 是 Go 的关键字，不能做包名。
+
+* **原因 2 (语义)**：这是一种**容器**。里面存放了 `Tristate`, `JSONTime`, `BitMask` 等各种**类型**。
+
+* **调用感**：`types.Tristate` -> 读作 "Types 集合里的 Tristate 类型"。
+
+  
+
+* **`errors`**
+
+* **原因**：里面包含了很多种标准的错误定义或处理工具。
+
+* **调用感**：`errors.New`。
+
+  
+
+* **`options`**
+
+* **原因**：存放各种配置选项。
+
+* **调用感**：`options.WithTimeout`。
+
+  
+
+* **`strings` / `bytes` (标准库范例)**
+
+* **原因**：为了避开内置类型 `string` 和 `byte`。同时它们提供了针对“多个字符串”或“字节切片”的操作函数。
+
+  
+
+---
+
+  
+
+### 3. v5.0 架构中的命名对照表
+
+  
+
+为了保持代码风格统一，请参考下表：
+
+  
+
+| 目录/包名 | 单/复数 | 原因解析 | 调用示例 (读起来要顺口) |
+
+| :--- | :--- | :--- | :--- |
+
+| **`pkg/util`** | **单数** | 这是一个通用工具箱 | `util.RandomString()` ✅ |
+
+| **`pkg/types`** | **复数** | 这是一堆自定义类型的集合 | `types.Tristate` ✅ |
+
+| **`biz/model`** | **单数** | 代表“数据模型”这一层概念 | `model.UserDTO` ✅ |
+
+| **`biz/service`** | **单数** | 代表“业务逻辑”这一层 | `service.NewOrderSvc` ✅ |
+
+| **`conf`** | **单数** | 代表配置 (Configuration) | `conf.Get()` ✅ |
+
+| **`pkg/errors`** | **复数** | 定义了一堆错误码 | `errors.ErrUserNotFound` ✅ |
+
+| **`pkg/consts`** | **复数** | 定义了一堆常量 | `consts.AppName` ✅ |
+
+  
+
+### 4. 为什么有人用 `models` (复数)？
+
+  
+
+你可能会在很多 GitHub 项目中看到 `models`。
+
+* **`model` (单数)**：强调**层级 (Layer)**。DDD（领域驱动设计）倾向于使用 `domain` 或 `model`，表示这是“模型层”。
+
+* **`models` (复数)**：强调**集合 (Collection)**。MVC 框架（如 Django, Rails, Beego）倾向于使用 `models`，表示“这里面放了一堆模型文件”。
+
+  
+
+**v5.0 规范建议**：
+
+为了与 `service`, `handler`, `dal` 这些单数层级保持一致，推荐使用 **`model` (单数)**。
+
+* Good: `handler` -> `service` -> `model` (全单数，整齐划一)
+
+* Bad: `handler` -> `service` -> `models` (节奏不对)
+
+  
+
+### 总结
+
+  
+
+* 如果是**功能、技术、层级** -> 用 **单数** (`util`, `json`, `service`)。
+
+* 如果是**存放物品的容器**、或者**避讳关键字** -> 用 **复数** (`types`, `consts`, `strings`)。
