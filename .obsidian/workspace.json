@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "研发规范/RestFul规范.md",
-                "mode": "preview",
+                "file": "研发规范/React 组件设计规范.md",
+                "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "RestFul规范"
+              "title": "React 组件设计规范"
             }
           }
         ]
@@ -184,11 +184,20 @@
       "templater-obsidian:Templater": false
     }
   },
-  "active": "ecec7fd7c27aa857",
+  "active": "756611a605cdcafe",
   "lastOpenFiles": [
+    "研发规范/未命名.md",
+    "研发规范/React 组件设计规范.md",
+    "使用技巧/git/Git配置多REMOTE.md",
+    "使用技巧/git/GIT 配置提交覆盖.md",
+    "使用技巧/git/如何使用钩子.md",
+    "Attachments/Pasted image 20250326153907.png",
+    "Attachments/Pasted image 20250326153654.png",
+    "Attachments/Pasted image 20250323154701.png",
+    "Attachments/Pasted image 20250323154413.png",
+    "研发规范/RestFul规范.md",
     "研发规范/前端开发规范.md",
     "研发规范/后端开发规范.md",
-    "研发规范/RestFul规范.md",
     "研发规范/Golang 服务端研发与架构规范.md",
     "未命名.base",
     "未命名.canvas",
@@ -202,23 +211,15 @@
     "LLM/mcp/SSEServer 和 StdioServer的区别.md",
     "playwright/使用bun编写一个playwright脚本.md",
     "LLM/langchain/Langchain.md",
-    "Attachments/Pasted image 20250326153907.png",
-    "Attachments/Pasted image 20250326153654.png",
-    "Attachments/Pasted image 20250323154701.png",
-    "Attachments/Pasted image 20250323154413.png",
     "方案设计/前端 Markdown解析.md",
     "未命名",
     "方案设计/前端沙箱构建方案.md",
     "方案设计/Markdown编辑器.md",
     "方案设计",
-    "使用技巧/git/Git配置多REMOTE.md",
-    "使用技巧/git/GIT 配置提交覆盖.md",
-    "使用技巧/git/如何使用钩子.md",
     "123.md",
     "预期方案.md",
     "预期方案二.md",
     "组件规范.md",
-    "TEST.md",
     "Pasted image 20251210135600.png",
     "未命名 2.base",
     "未命名 3.base",
